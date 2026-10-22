@@ -3,6 +3,44 @@
 
 alter table public.profiles
   add column if not exists is_superadmin boolean not null default false;
+alter table public.profiles
+  add column if not exists email text;
+
+-- Keep profile email in sync with Supabase Auth so admins can identify users.
+update public.profiles as p
+set email = u.email
+from auth.users as u
+where p.id = u.id and p.email is distinct from u.email;
+
+create or replace function public.sync_profile_from_auth_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.profiles (id, email, first_name, last_name)
+  values (
+    new.id,
+    new.email,
+    nullif(trim(coalesce(new.raw_user_meta_data ->> 'given_name', new.raw_user_meta_data ->> 'first_name')), ''),
+    nullif(trim(coalesce(new.raw_user_meta_data ->> 'family_name', new.raw_user_meta_data ->> 'last_name')), '')
+  )
+  on conflict (id) do update set email = excluded.email;
+  return new;
+end;
+$$;
+revoke all on function public.sync_profile_from_auth_user() from public, anon, authenticated;
+
+drop trigger if exists sync_profile_after_auth_insert on auth.users;
+create trigger sync_profile_after_auth_insert
+  after insert on auth.users
+  for each row execute function public.sync_profile_from_auth_user();
+
+drop trigger if exists sync_profile_after_auth_email_update on auth.users;
+create trigger sync_profile_after_auth_email_update
+  after update of email on auth.users
+  for each row execute function public.sync_profile_from_auth_user();
 
 -- Prevent regular users from changing their own privilege flag.
 revoke update on public.profiles from authenticated;
@@ -40,6 +78,20 @@ create policy "Superadmins can read all generation details"
   on public.caption_generation_details for select to authenticated
   using ((select public.is_current_user_superadmin()));
 
+grant insert (generation_id, user_id, source_text, prompt_text)
+  on public.caption_generation_details to authenticated;
+grant update (source_text, prompt_text)
+  on public.caption_generation_details to authenticated;
+drop policy if exists "Superadmins can create generation details" on public.caption_generation_details;
+create policy "Superadmins can create generation details"
+  on public.caption_generation_details for insert to authenticated
+  with check ((select public.is_current_user_superadmin()));
+drop policy if exists "Superadmins can update generation details" on public.caption_generation_details;
+create policy "Superadmins can update generation details"
+  on public.caption_generation_details for update to authenticated
+  using ((select public.is_current_user_superadmin()))
+  with check ((select public.is_current_user_superadmin()));
+
 -- Keep public feed reads intact; grant authenticated admins the columns and
 -- policies needed to manage media through the server-side Supabase client.
 -- Keep the feed's column-level grant; do not expose caption owner IDs to every
@@ -63,6 +115,17 @@ drop policy if exists "Superadmins can delete media" on public.caption_generatio
 create policy "Superadmins can delete media"
   on public.caption_generations for delete to authenticated
   using ((select public.is_current_user_superadmin()));
+
+-- Admin uploads use the existing public meme-images bucket so the feed can
+-- render them. Only superadmins gain these cross-user storage permissions.
+drop policy if exists "Superadmins can upload meme images" on storage.objects;
+create policy "Superadmins can upload meme images"
+  on storage.objects for insert to authenticated
+  with check (bucket_id = 'meme-images' and (select public.is_current_user_superadmin()));
+drop policy if exists "Superadmins can delete meme images" on storage.objects;
+create policy "Superadmins can delete meme images"
+  on storage.objects for delete to authenticated
+  using (bucket_id = 'meme-images' and (select public.is_current_user_superadmin()));
 
 -- BOOTSTRAP (run separately after the migration):
 -- 1. Deploy the app and sign in once with Google, creating your profile.

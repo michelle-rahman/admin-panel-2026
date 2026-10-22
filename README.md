@@ -21,8 +21,10 @@ Copy `.env.example` to `.env.local` for local development and fill in the same p
 
 ## Features
 
-- Overview cards for media, votes, upvote ratio, and profiles.
-- Read profiles and individual upvote/downvote records.
-- Create, read, update, and delete generated caption media.
+- Overview cards with exact full-database counts and approval ratio.
+- Searchable, paginated user profiles with email, name, avatar, join date, and ID.
+- Filterable, paginated individual upvote/downvote records with voter email.
+- Paginated caption media with search, image previews, source/context and prompt details.
+- Create, read, update, and delete caption media and upload/replace/remove its image file.
 - Google OAuth and server-side superadmin checks on the dashboard and all mutation actions.
 - RLS migration that enforces the same admin boundary inside Supabase.
